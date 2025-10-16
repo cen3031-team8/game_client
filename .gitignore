@@ -1,0 +1,13 @@
+# Python venv
+bin/
+lib/
+lib64
+include/
+pyvenv.cfg
+
+# Caches
+__pycache__/
+*.pyc
+
+# Misc
+.DS_Store
