@@ -35,7 +35,7 @@ def login_callback():
         # Handle response
         if response.status_code == 200:
             # Successful login
-            dpg.set_value("status_text", "Login Successful! Welcome, {}!".format(username))
+            dpg.set_value("status_text", f"Login Successful! Welcome, {username}!")
             dpg.configure_item("status_text", color=(0, 255, 0)) # Green
             # can later hide the login window and show the main game window
             # dpg.hide_item("login_window")
