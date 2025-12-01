@@ -112,9 +112,9 @@ class WebSocketClient:
             if item is None:
                 break
             try:
-                print("[ws][dummy] would send:", json.dumps(item))
+                print("[ws] send:", json.dumps(item))
             except Exception:
-                print("[ws][dummy] send error")
+                print("[ws] send error")
 
     # --- real async runner using `websockets` package ---
     def _run_async(self):
