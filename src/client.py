@@ -1,5 +1,6 @@
 import pygame
 import sys
+import os
 import random
 
 # --- pygame setup ---
@@ -18,7 +19,8 @@ running = True
 dt = 0
 
 # player (small square placeholder for a sprite)
-PLAYER_SIZE = 28
+# NOTE: doubled size per request (was 28)
+PLAYER_SIZE = 56
 player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
 player_color = pygame.Color(230, 80, 80)  # red-ish
 player_border = pygame.Color(40, 40, 40)
@@ -44,6 +46,92 @@ try:
 except Exception as e:
     print(f"Warning: couldn't load background.png ({e}). Using generated grass.")
     background = None
+
+# Sprite assets (try to load from same directory as this file)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+VULPIX_PATH = os.path.join(SCRIPT_DIR, "vulpix.png")
+ENEMY_PATH = os.path.join(SCRIPT_DIR, "enemy.png")
+
+# player sprite (vulpix) and enemy sprite
+player_sprite = None
+player_sprite_flipped = None
+player_facing_right = True
+enemy_sprite = None
+player_img_size = PLAYER_SIZE
+try:
+    player_sprite = pygame.image.load(VULPIX_PATH).convert_alpha()
+    # scale player sprite to fit the player size (preserve aspect)
+    player_sprite = pygame.transform.smoothscale(player_sprite, (PLAYER_SIZE, PLAYER_SIZE))
+    # precompute flipped version so we don't flip every frame
+    try:
+        player_sprite_flipped = pygame.transform.flip(player_sprite, True, False)
+    except Exception:
+        player_sprite_flipped = None
+except Exception:
+    player_sprite = None
+    print(f"[assets] vulpix not found at {VULPIX_PATH}; using square placeholder")
+
+try:
+    enemy_sprite = pygame.image.load(ENEMY_PATH).convert_alpha()
+    # scale enemy to similar size but slightly larger
+    enemy_sprite = pygame.transform.smoothscale(enemy_sprite, (PLAYER_SIZE + 8, PLAYER_SIZE + 8))
+except Exception:
+    enemy_sprite = None
+    print(f"[assets] enemy not found at {ENEMY_PATH}; using colored block placeholder")
+
+# enemy game state
+enemy_alive = True
+enemy_pos = pygame.Vector2(0, 0)
+enemy_rect = pygame.Rect(0, 0, 0, 0)
+
+# Try to spawn enemy at a random location that doesn't overlap the player start
+def spawn_enemy():
+    global enemy_pos, enemy_rect, enemy_alive
+    margin = 64
+    w, h = screen.get_size()
+    attempts = 0
+    safe_dist = PLAYER_SIZE * 4
+    while attempts < 120:
+        ex = random.randint(margin, w - margin)
+        ey = random.randint(margin, h - margin)
+        pos = pygame.Vector2(ex, ey)
+        if pos.distance_to(player_pos) > safe_dist:
+            enemy_pos = pos
+            break
+        attempts += 1
+    # fallback: place somewhere
+    if attempts >= 120:
+        enemy_pos = pygame.Vector2(margin, margin)
+
+    # set rect
+    s = PLAYER_SIZE + 8
+    enemy_rect = pygame.Rect(0, 0, s, s)
+    enemy_rect.center = (int(enemy_pos.x), int(enemy_pos.y))
+    enemy_alive = True
+
+# spawn first enemy
+spawn_enemy()
+
+# respawn settings
+respawn_min = 3.0
+respawn_max = 7.0
+next_spawn_time = None
+
+# skill-check / catch state
+skill_active = False
+skill_start_time = 0.0
+skill_duration = 2.6
+skill_bar_w = 320
+skill_bar_h = 24
+skill_target_w = 64
+skill_result = None
+
+# popup text state
+popup_text = ""
+popup_until = 0.0
+
+# friendly enemy name for inventory
+enemy_name = os.path.splitext(os.path.basename(ENEMY_PATH))[0] if ENEMY_PATH else "wild"
 
 # cached procedurally generated grass surface (used when background is None)
 _grass_surface = None
@@ -332,6 +420,17 @@ def draw_inventory_modal():
     title = font.render("Inventory", True, (40, 40, 40))
     screen.blit(title, (modal_rect.x + 16, modal_rect.y + 12))
 
+    # inventory list
+    list_x = modal_rect.x + 20
+    list_y = modal_rect.y + 48
+    if inventory:
+        for i, item in enumerate(inventory):
+            it_surf = font.render(f"- {item}", True, (40, 40, 40))
+            screen.blit(it_surf, (list_x, list_y + i * 22))
+    else:
+        none_surf = font.render("(empty)", True, (120, 120, 120))
+        screen.blit(none_surf, (list_x, list_y))
+
     # close button (top-right of modal)
     cb_w, cb_h = 28, 24
     cb_rect = pygame.Rect(modal_rect.right - cb_w - 12, modal_rect.y + 10, cb_w, cb_h)
@@ -366,18 +465,58 @@ while running:
                 btn = draw_inventory_button((mx, my))
                 if btn.collidepoint((mx, my)):
                     inventory_open = True
+        elif event.type == pygame.KEYDOWN:
+            # during skill-check, space/enter attempts the catch
+            if skill_active and event.key in (pygame.K_SPACE, pygame.K_RETURN):
+                # evaluate skill marker position
+                elapsed = time.time() - skill_start_time
+                p = min(1.0, max(0.0, elapsed / skill_duration))
+                # ping-pong marker across the bar
+                if int(elapsed / skill_duration) % 2 == 1:
+                    p = 1 - p
+                marker_x = int((screen.get_width() - skill_bar_w) / 2 + p * skill_bar_w)
+                # compute target zone
+                tx = skill_target_x
+                tw = skill_target_w
+                if tx <= marker_x <= tx + tw:
+                    # success
+                    skill_result = 'success'
+                    skill_active = False
+                    # remove the enemy and add to inventory
+                    if enemy_alive:
+                        enemy_alive = False
+                        inventory.append(enemy_name)
+                        # clear enemy rect so it won't collide again and hide sprite
+                        enemy_rect.width = 0
+                        enemy_rect.height = 0
+                        popup_text = "pokemon caught"
+                        popup_until = time.time() + 3.0
+                        # schedule next spawn at a random time between respawn_min/max
+                        next_spawn_time = time.time() + random.uniform(respawn_min, respawn_max)
+                else:
+                    skill_result = 'fail'
+                    skill_active = False
+                    popup_text = "missed!"
+                    popup_until = time.time() + 1.2
 
-    # input (continuous key state)
+        # input (continuous key state) -- blocked while in skill-check
     keys = pygame.key.get_pressed()
     move = pygame.Vector2(0, 0)
-    if keys[pygame.K_w] or keys[pygame.K_UP]:
-        move.y = -1
-    if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-        move.y = 1
-    if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-        move.x = -1
-    if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-        move.x = 1
+    if not skill_active:
+        if keys[pygame.K_w] or keys[pygame.K_UP]:
+            move.y = -1
+        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
+            move.y = 1
+        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
+            move.x = -1
+        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
+            move.x = 1
+
+    # update facing direction from horizontal movement
+    if move.x > 0:
+        player_facing_right = True
+    elif move.x < 0:
+        player_facing_right = False
 
     # normalize to prevent faster diagonal movement
     if move.length_squared() > 0:
@@ -388,6 +527,24 @@ while running:
     half = PLAYER_SIZE / 2
     player_pos.x = max(half + 8, min(screen.get_width() - half - 8, player_pos.x))
     player_pos.y = max(half + 8, min(screen.get_height() - half - 8, player_pos.y))
+
+    # if we're overlapping the enemy and it's alive, start skill-check
+    player_rect = pygame.Rect(0, 0, PLAYER_SIZE, PLAYER_SIZE)
+    player_rect.center = (int(player_pos.x), int(player_pos.y))
+    if enemy_alive and not skill_active and player_rect.colliderect(enemy_rect):
+        skill_active = True
+        skill_start_time = time.time()
+        # place target somewhere along bar
+        bar_left = (screen.get_width() - skill_bar_w) // 2
+        skill_target_x = random.randint(bar_left + 16, bar_left + skill_bar_w - skill_target_w - 16)
+        skill_result = None
+
+    # if we captured an enemy and a spawn time is scheduled, check whether to spawn the next one
+    if not enemy_alive and next_spawn_time is not None:
+        if time.time() >= next_spawn_time:
+            spawn_enemy()
+            # reset timer
+            next_spawn_time = None
 
     # send periodic game state over websocket (non-blocking)
     now = time.time()
@@ -419,13 +576,29 @@ while running:
     # draw UI overlays first (HUD/background elements)
     draw_ui()
 
-    # draw player as a square centered at player_pos
+    # draw enemy (if alive)
+    if enemy_alive:
+        # update rect center
+        enemy_rect.center = (int(enemy_pos.x), int(enemy_pos.y))
+        if enemy_sprite:
+            er = enemy_sprite.get_rect(center=enemy_rect.center)
+            screen.blit(enemy_sprite, er.topleft)
+        else:
+            pygame.draw.rect(screen, (150, 40, 40), enemy_rect, border_radius=6)
+
+    # draw player sprite (or fallback square)
     rect = pygame.Rect(0, 0, PLAYER_SIZE, PLAYER_SIZE)
     rect.center = (int(player_pos.x), int(player_pos.y))
-    # border
-    pygame.draw.rect(screen, player_border, rect.inflate(4, 4), border_radius=6)
-    # main
-    pygame.draw.rect(screen, player_color, rect, border_radius=6)
+    if player_sprite:
+        # draw flipped or normal sprite based on facing
+        sprite_to_draw = player_sprite_flipped if player_facing_right and player_sprite_flipped else player_sprite
+        sprite_rect = sprite_to_draw.get_rect(center=rect.center)
+        screen.blit(sprite_to_draw, sprite_rect.topleft)
+    else:
+        # border
+        pygame.draw.rect(screen, player_border, rect.inflate(4, 4), border_radius=6)
+        # main
+        pygame.draw.rect(screen, player_color, rect, border_radius=6)
 
     # draw inventory button above world so it's always clickable
     mouse_pos = pygame.mouse.get_pos()
@@ -433,6 +606,56 @@ while running:
 
     # draw health bar bottom-left
     draw_health_bar()
+
+    # skill-check overlay / timing
+    if skill_active:
+        elapsed = time.time() - skill_start_time
+        bar_left = (screen.get_width() - skill_bar_w) // 2
+        bar_top = (screen.get_height() // 2) - 48
+        bar_rect = pygame.Rect(bar_left, bar_top, skill_bar_w, skill_bar_h)
+
+        # draw overlay background
+        overlay = pygame.Surface((screen.get_width(), screen.get_height()), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 110))
+        screen.blit(overlay, (0, 0))
+
+        # draw bar and target
+        pygame.draw.rect(screen, (60, 60, 60), bar_rect, border_radius=6)
+        target_rect = pygame.Rect(skill_target_x, bar_top, skill_target_w, skill_bar_h)
+        pygame.draw.rect(screen, (60, 160, 60), target_rect, border_radius=6)
+
+        # marker moves left-to-right then back (ping-pong)
+        period = skill_duration
+        p = min(1.0, max(0.0, elapsed / period))
+        if int(elapsed / period) % 2 == 1:
+            p = 1 - p
+        marker_x = int(bar_left + p * skill_bar_w)
+        marker_rect = pygame.Rect(marker_x - 3, bar_top - 6, 6, skill_bar_h + 12)
+        pygame.draw.rect(screen, (240, 220, 80), marker_rect)
+
+        # instruction text
+        inst = "Press [SPACE] when the marker is inside the green zone"
+        inst_surf = font.render(inst, True, (255, 255, 255))
+        inst_rect = inst_surf.get_rect(center=(screen.get_width() // 2, bar_top - 28))
+        screen.blit(inst_surf, inst_rect)
+
+        # timeout: if elapsed exceeds a limit, treat as failed
+        if elapsed > skill_duration * 2.5:
+            skill_active = False
+            skill_result = 'fail'
+            popup_text = "missed!"
+            popup_until = time.time() + 1.2
+
+    # display temporary popup text (e.g., pokemon caught)
+    if popup_text and time.time() < popup_until:
+        pop_surf = font.render(popup_text, True, (240, 240, 240))
+        pop_bg = pygame.Surface((pop_surf.get_width() + 14, pop_surf.get_height() + 10), pygame.SRCALPHA)
+        pop_bg.fill((40, 40, 40, 220))
+        px = (screen.get_width() - pop_bg.get_width()) // 2
+        py = 60
+        pygame.draw.rect(pop_bg, (200, 200, 200), pop_bg.get_rect(), 1, border_radius=6)
+        screen.blit(pop_bg, (px, py))
+        screen.blit(pop_surf, (px + 7, py + 6))
 
     # if inventory is open, draw modal on top
     if inventory_open:
