@@ -2,6 +2,7 @@ import pygame
 import sys
 import os
 import random
+import requests
 
 # --- pygame setup ---
 import threading
@@ -17,6 +18,30 @@ pygame.display.set_caption("Pokémon Game")
 clock = pygame.time.Clock()
 running = True
 dt = 0
+
+# API configuration
+API_URL = "http://127.0.0.1:8508"
+JWT_TOKEN = None
+USER_ID = None
+USERNAME = None
+
+# Load JWT token from login
+def load_token():
+    global JWT_TOKEN, USER_ID, USERNAME
+    try:
+        if os.path.exists("token.json"):
+            with open("token.json", "r") as f:
+                data = json.load(f)
+                JWT_TOKEN = data.get("token")
+                USER_ID = data.get("userId")
+                USERNAME = data.get("username")
+                print(f"[auth] Loaded token for user: {USERNAME}")
+        else:
+            print("[auth] No token file found. Running without authentication.")
+    except Exception as e:
+        print(f"[auth] Error loading token: {e}")
+
+load_token()
 
 # player (small square placeholder for a sprite)
 PLAYER_SIZE = 56
@@ -106,6 +131,33 @@ def spawn_enemy():
     enemy_alive = True
 
 spawn_enemy()
+
+def send_pokemon_catch():
+    """Send a request to the API to add a caught pokemon to the user's inventory."""
+    global JWT_TOKEN
+    if not JWT_TOKEN:
+        print("[api] No token available, skipping pokemon catch submission")
+        return
+    
+    try:
+        headers = {
+            "Authorization": f"Bearer {JWT_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        payload = {}
+        response = requests.post(
+            f"{API_URL}/pokemon/add",
+            json=payload,
+            headers=headers,
+            timeout=5
+        )
+        if response.status_code == 200:
+            data = response.json()
+            print(f"[api] Pokemon caught! Total: {data.get('quantity', '?')}")
+        else:
+            print(f"[api] Failed to add pokemon: {response.status_code}")
+    except Exception as e:
+        print(f"[api] Error sending pokemon catch: {e}")
 
 # respawn settings
 respawn_min = 3.0
@@ -454,6 +506,8 @@ while running:
                         popup_until = time.time() + 3.0
                         # schedule next spawn at a random time between respawn_min/max
                         next_spawn_time = time.time() + random.uniform(respawn_min, respawn_max)
+                        # send catch to API
+                        send_pokemon_catch()
                 else:
                     skill_result = 'fail'
                     skill_active = False

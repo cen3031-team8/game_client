@@ -2,10 +2,26 @@ import dearpygui.dearpygui as dpg
 import requests
 import subprocess
 import screeninfo
+import json
+import os
 
 API_URL = "http://127.0.0.1:8508"
 LOGIN_ENDPOINT = "/auth/login"
 REGISTER_ENDPOINT = "/auth/register"
+TOKEN_FILE = "token.json"
+
+
+def save_token(token, user_id, username):
+    """Save the JWT token and user info to a file for the client to use."""
+    try:
+        with open(TOKEN_FILE, "w") as f:
+            json.dump({
+                "token": token,
+                "userId": user_id,
+                "username": username
+            }, f)
+    except Exception as e:
+        print(f"Error saving token: {e}")
 
 
 def login_callback():
@@ -15,10 +31,14 @@ def login_callback():
     dpg.set_value("status_text", "Logging in...")
     dpg.configure_item("status_text", color=(255, 255, 0))
 
-    payload = {"user": username, "pass": password}
+    payload = {"username": username, "password": password}
     try:
         response = requests.post(API_URL + LOGIN_ENDPOINT, json=payload, timeout=5)
         if response.status_code == 200:
+            data = response.json()
+            # Save token for client to use
+            save_token(data.get("token"), data.get("userId"), data.get("username"))
+            
             dpg.set_value("status_text", f"Login Successful! Welcome, {username}!")
             dpg.configure_item("status_text", color=(0, 255, 0))
             subprocess.Popen(["python3", "client.py"])
@@ -42,10 +62,15 @@ def register_callback():
     dpg.set_value("status_text", "Registering...")
     dpg.configure_item("status_text", color=(255, 255, 0))
 
-    payload = {"user": username, "pass": password}
+    # API requires email, so use username as email if not provided separately
+    payload = {"username": username, "email": username + "@pokemon.local", "password": password}
     try:
         response = requests.post(API_URL + REGISTER_ENDPOINT, json=payload, timeout=5)
         if response.status_code in (200, 201):
+            data = response.json()
+            # Save token for client to use
+            save_token(data.get("token"), data.get("userId"), data.get("username"))
+            
             dpg.set_value("status_text", f"Registration successful for {username}! You can now log in.")
             dpg.configure_item("status_text", color=(0, 255, 0))
         elif response.status_code == 409:
