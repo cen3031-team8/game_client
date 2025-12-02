@@ -19,7 +19,6 @@ running = True
 dt = 0
 
 # player (small square placeholder for a sprite)
-# NOTE: doubled size per request (was 28)
 PLAYER_SIZE = 56
 player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
 player_color = pygame.Color(230, 80, 80)  # red-ish
@@ -47,7 +46,6 @@ except Exception as e:
     print(f"Warning: couldn't load background.png ({e}). Using generated grass.")
     background = None
 
-# Sprite assets (try to load from same directory as this file)
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 VULPIX_PATH = os.path.join(SCRIPT_DIR, "vulpix.png")
 ENEMY_PATH = os.path.join(SCRIPT_DIR, "enemy.png")
@@ -60,7 +58,7 @@ enemy_sprite = None
 player_img_size = PLAYER_SIZE
 try:
     player_sprite = pygame.image.load(VULPIX_PATH).convert_alpha()
-    # scale player sprite to fit the player size (preserve aspect)
+    # scale player sprite to fit the player size
     player_sprite = pygame.transform.smoothscale(player_sprite, (PLAYER_SIZE, PLAYER_SIZE))
     # precompute flipped version so we don't flip every frame
     try:
@@ -73,7 +71,6 @@ except Exception:
 
 try:
     enemy_sprite = pygame.image.load(ENEMY_PATH).convert_alpha()
-    # scale enemy to similar size but slightly larger
     enemy_sprite = pygame.transform.smoothscale(enemy_sprite, (PLAYER_SIZE + 8, PLAYER_SIZE + 8))
 except Exception:
     enemy_sprite = None
@@ -84,7 +81,6 @@ enemy_alive = True
 enemy_pos = pygame.Vector2(0, 0)
 enemy_rect = pygame.Rect(0, 0, 0, 0)
 
-# Try to spawn enemy at a random location that doesn't overlap the player start
 def spawn_enemy():
     global enemy_pos, enemy_rect, enemy_alive
     margin = 64
@@ -109,7 +105,6 @@ def spawn_enemy():
     enemy_rect.center = (int(enemy_pos.x), int(enemy_pos.y))
     enemy_alive = True
 
-# spawn first enemy
 spawn_enemy()
 
 # respawn settings
@@ -117,7 +112,6 @@ respawn_min = 3.0
 respawn_max = 7.0
 next_spawn_time = None
 
-# skill-check / catch state
 skill_active = False
 skill_start_time = 0.0
 skill_duration = 2.6
@@ -126,7 +120,6 @@ skill_bar_h = 24
 skill_target_w = 64
 skill_result = None
 
-# popup text state
 popup_text = ""
 popup_until = 0.0
 
@@ -135,19 +128,11 @@ enemy_name = os.path.splitext(os.path.basename(ENEMY_PATH))[0] if ENEMY_PATH els
 
 # cached procedurally generated grass surface (used when background is None)
 _grass_surface = None
-# --- WebSocket client boilerplate ---
-# Configure the websocket URL here. Update to your server's ws endpoint.
+# NOTE: websocket url is set to localhost so that others can clone and test the code. normally, this points to our production server.
 WS_URL = "ws://127.0.0.1:8508/ws"
 
 
 class WebSocketClient:
-    """Background-thread WebSocket client with a thread-safe outgoing queue.
-
-    If the `websockets` package is installed the client will attempt to
-    connect and send JSON messages. If not available a dummy client will
-    consume the queue and print messages (placeholder behavior).
-    """
-
     def __init__(self, url=WS_URL):
         self.url = url
         self._send_q = queue.Queue()
@@ -160,7 +145,6 @@ class WebSocketClient:
             self._use_real = True
             self._websockets = websockets
         except Exception:
-            print("[ws] 'websockets' package not available — using dummy logger client")
             self._use_real = False
 
     def start(self):
@@ -189,9 +173,8 @@ class WebSocketClient:
         except Exception:
             print("[ws] failed to queue state")
 
-    # --- dummy runner (no external deps) ---
     def _run_dummy(self):
-        print("[ws] dummy ws client running — messages will be logged")
+        print("[ws] ws client running — messages will be logged")
         while self._running:
             try:
                 item = self._send_q.get(timeout=0.2)
@@ -204,9 +187,7 @@ class WebSocketClient:
             except Exception:
                 print("[ws] send error")
 
-    # --- real async runner using `websockets` package ---
     def _run_async(self):
-        # run an asyncio loop in this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -228,9 +209,7 @@ class WebSocketClient:
                 print(f"[ws] connecting to {self.url} ...")
                 async with ws_lib.connect(self.url) as ws:
                     print("[ws] connected")
-                    # loop while connected
                     while self._running:
-                        # try to get a message from send queue in a thread
                         try:
                             item = await asyncio.get_event_loop().run_in_executor(
                                 None, lambda: self._send_q.get(timeout=0.25)
@@ -253,18 +232,11 @@ class WebSocketClient:
                 await asyncio.sleep(1.0)
 
 
-# instantiate and start client; it will be non-blocking
 ws_client = WebSocketClient(WS_URL)
 ws_client.start()
-# periodic send settings
 _last_send_time = 0.0
 _send_interval = 0.5  # seconds
 def generate_grass_surface(size, tile_size=8, seed=None):
-    """Create a pixel-art style grass surface of given size.
-
-    tile_size: size of the small blocks (in pixels) used to paint grass.
-    seed: optional seed for deterministic generation.
-    """
     if seed is not None:
         rnd = random.Random(seed)
     else:
@@ -273,7 +245,6 @@ def generate_grass_surface(size, tile_size=8, seed=None):
     w, h = size
     surf = pygame.Surface((w, h))
 
-    # palette of greens for variety
     palette = [
         (74, 148, 74),  # medium
         (86, 170, 86),  # lighter
@@ -282,19 +253,15 @@ def generate_grass_surface(size, tile_size=8, seed=None):
         (74, 130, 58),  # olive-ish
     ]
 
-    # occasionally place a 'flower' color
     flower_colors = [(240, 200, 80), (220, 140, 200), (240, 120, 120)]
 
-    # loop over tiles
     for y in range(0, h, tile_size):
         for x in range(0, w, tile_size):
             color = rnd.choice(palette)
             rect = pygame.Rect(x, y, tile_size, tile_size)
             surf.fill(color, rect)
 
-            # small chance to add a tiny contrasting block to make texture
             if rnd.random() < 0.06:
-                # smaller inset square
                 inset = max(1, tile_size // 3)
                 ox = x + rnd.randint(0, max(0, tile_size - inset))
                 oy = y + rnd.randint(0, max(0, tile_size - inset))
@@ -339,9 +306,6 @@ def draw_ui():
 
 
 def draw_inventory_button(mouse_pos=None):
-    """Draws a button in the bottom-right that opens the inventory modal.
-    Returns the pygame.Rect of the button for click tests.
-    """
     btn_w, btn_h = 120, 36
     margin = 16
     x = screen.get_width() - btn_w - margin
@@ -398,9 +362,6 @@ def draw_health_bar():
 
 
 def draw_inventory_modal():
-    """Draw the inventory modal centered at ~65% of the screen size.
-    The modal is 'paper' colored and has a close button.
-    """
     w = int(screen.get_width() * 0.65)
     h = int(screen.get_height() * 0.65)
     x = (screen.get_width() - w) // 2
@@ -559,7 +520,6 @@ while running:
         try:
             ws_client.send_state(state)
         except Exception:
-            # send failures are non-fatal here
             pass
         _last_send_time = now
 
@@ -633,20 +593,17 @@ while running:
         marker_rect = pygame.Rect(marker_x - 3, bar_top - 6, 6, skill_bar_h + 12)
         pygame.draw.rect(screen, (240, 220, 80), marker_rect)
 
-        # instruction text
         inst = "Press [SPACE] when the marker is inside the green zone"
         inst_surf = font.render(inst, True, (255, 255, 255))
         inst_rect = inst_surf.get_rect(center=(screen.get_width() // 2, bar_top - 28))
         screen.blit(inst_surf, inst_rect)
 
-        # timeout: if elapsed exceeds a limit, treat as failed
         if elapsed > skill_duration * 2.5:
             skill_active = False
             skill_result = 'fail'
             popup_text = "missed!"
             popup_until = time.time() + 1.2
 
-    # display temporary popup text (e.g., pokemon caught)
     if popup_text and time.time() < popup_until:
         pop_surf = font.render(popup_text, True, (240, 240, 240))
         pop_bg = pygame.Surface((pop_surf.get_width() + 14, pop_surf.get_height() + 10), pygame.SRCALPHA)
@@ -657,15 +614,12 @@ while running:
         screen.blit(pop_bg, (px, py))
         screen.blit(pop_surf, (px + 7, py + 6))
 
-    # if inventory is open, draw modal on top
     if inventory_open:
         modal_rect, cb_rect = draw_inventory_modal()
     pygame.display.flip()
 
-    # frame timing
     dt = clock.tick(60) / 1000.0
 
-# stop websocket client cleanly
 try:
     ws_client.stop()
 except Exception:
